@@ -377,15 +377,17 @@ class QuiltVideoProcessor:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        self.update_progress(5, f"Video info: {width}x{height}, {fps:.1f} fps, {frame_count} frames")
+        self.update_progress(5, f"Converting from {width}x{height} quilt to 3840x2160 display format")
         
         # Calculate view dimensions
         view_width = width // self.columns
         view_height = height // self.rows
         
-        # Setup output video
+        # Setup output video with target resolution
+        target_width = 3840  # Looking Glass display width
+        target_height = 2160  # Looking Glass display height
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(self.output_path, fourcc, fps, (width, height))
+        out = cv2.VideoWriter(self.output_path, fourcc, fps, (target_width, target_height))
         
         try:
             frame_idx = 0
@@ -429,35 +431,65 @@ class QuiltVideoProcessor:
         return self.apply_lenticular_interlacing(quilt_frame, center, pitch, slope)
     
     def apply_lenticular_interlacing(self, quilt_frame, center, pitch, slope):
-        """Apply lenticular interlacing based on calibration"""
+        """Apply proper lenticular interlacing based on calibration"""
         height, width = quilt_frame.shape[:2]
-        output_frame = np.zeros_like(quilt_frame)
+        
+        # Target output resolution (Looking Glass display size)
+        target_width = 3840
+        target_height = 2160
+        
+        # Create output frame with target resolution
+        output_frame = np.zeros((target_height, target_width, 3), dtype=quilt_frame.dtype)
         
         view_width = width // self.columns
         view_height = height // self.rows
         total_views = self.columns * self.rows
         
-        # For each output pixel column
-        for x in range(width):
-            # Calculate which view this column should sample from
-            # This is a simplified lenticular calculation
-            view_offset = ((x - center) / pitch + slope) * total_views
-            view_index = int(view_offset) % total_views
+        # Normalize calibration parameters
+        center_norm = center if abs(center) <= 1.0 else center / target_width
+        pitch_pixels = pitch if pitch > 1.0 else pitch * target_width
+        
+        # Scale quilt to target height while maintaining aspect ratio
+        scale_factor = target_height / view_height
+        scaled_view_width = int(view_width * scale_factor)
+        
+        # Process each column in the output
+        for x in range(target_width):
+            # Calculate the lenticular lens position for this pixel column
+            lens_pos = (x / target_width - 0.5 - center_norm) / pitch_pixels * target_width
             
-            # Convert view index to row/column
+            # Determine which view this pixel should sample from
+            view_float = (lens_pos + slope) * total_views / target_width + total_views / 2
+            view_index = int(view_float) % total_views
+            
+            # Ensure view index is valid
+            if view_index < 0:
+                view_index += total_views
+            
+            # Convert view index to grid position
             view_col = view_index % self.columns
             view_row = view_index // self.columns
             
-            # Calculate source position in quilt
-            src_x = (view_col * view_width) + (x % view_width)
-            src_y_start = view_row * view_height
+            # Calculate sub-pixel position within the view
+            subpixel_x = (view_float - int(view_float)) * scaled_view_width
+            source_x = int((view_col * view_width) + (subpixel_x * view_width / scaled_view_width))
+            source_x = max(0, min(source_x, width - 1))
             
-            # Copy the column from the appropriate view
-            if src_x < width and src_y_start < height:
-                end_y = min(src_y_start + view_height, height)
-                output_height = min(height, end_y - src_y_start)
+            # Extract and scale the column from the source view
+            source_y_start = view_row * view_height
+            source_y_end = min(source_y_start + view_height, height)
+            
+            if source_y_start < height:
+                # Get the column from the quilt
+                source_column = quilt_frame[source_y_start:source_y_end, source_x:source_x+1]
                 
-                output_frame[:output_height, x] = quilt_frame[src_y_start:src_y_start + output_height, src_x]
+                if source_column.shape[0] > 0:
+                    # Resize to target height
+                    if source_column.shape[0] != target_height:
+                        resized_column = cv2.resize(source_column, (1, target_height), interpolation=cv2.INTER_LINEAR)
+                        output_frame[:, x] = resized_column.reshape(target_height, 3)
+                    else:
+                        output_frame[:, x] = source_column.reshape(target_height, 3)
         
         return output_frame
 
