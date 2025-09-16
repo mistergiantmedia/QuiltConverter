@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Looking Glass Quilt Video Converter - Standalone GUI Application
-A user-friendly desktop app for converting quilt videos to Looking Glass ready format
+Looking Glass Quilt to Native Video Converter - GUI Version
+Simple drag-and-drop interface for converting quilt videos to Looking Glass native format
 
-Requirements:
-pip install tkinter opencv-python numpy pillow
+Requirements: pip install opencv-python numpy tqdm tkinter
 """
 
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+import sys
+import os
+import json
+import re
 import cv2
 import numpy as np
-import json
-import os
-import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
-from PIL import Image, ImageTk
-import sys
+import threading
+from typing import Tuple, Dict, Any
 
 class QuiltConverterGUI:
     def __init__(self, root):
@@ -26,27 +26,15 @@ class QuiltConverterGUI:
         self.root.resizable(True, True)
         
         # Variables
-        self.quilt_video_path = tk.StringVar()
-        self.visual_json_path = tk.StringVar()
+        self.input_video = tk.StringVar()
+        self.visual_json = tk.StringVar()
         self.output_path = tk.StringVar()
-        self.conversion_progress = tk.DoubleVar()
-        self.is_converting = False
+        self.calibration = None
         
-        # Create GUI
-        self.create_widgets()
+        self.setup_ui()
         
-        # Center window
-        self.center_window()
-    
-    def center_window(self):
-        """Center the window on screen"""
-        self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - (self.root.winfo_width() // 2)
-        y = (self.root.winfo_screenheight() // 2) - (self.root.winfo_height() // 2)
-        self.root.geometry(f"+{x}+{y}")
-    
-    def create_widgets(self):
-        """Create all GUI widgets"""
+    def setup_ui(self):
+        """Create the user interface"""
         # Main frame
         main_frame = ttk.Frame(self.root, padding="20")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -58,450 +46,335 @@ class QuiltConverterGUI:
         
         # Title
         title_label = ttk.Label(main_frame, text="Looking Glass Quilt Video Converter", 
-                               font=('Arial', 16, 'bold'))
+                               font=("Arial", 16, "bold"))
         title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
         
         # Description
-        desc_text = ("Convert quilt videos (qs5x9a1.87.mp4) to Looking Glass ready format\n"
-                    "using your display's calibration file (visual.json)")
-        desc_label = ttk.Label(main_frame, text=desc_text, font=('Arial', 9))
+        desc_text = ("Convert quilt videos (e.g., video_qs5x9a1.87.mp4) to Looking Glass native format.\n"
+                    "This creates videos that can be displayed directly on your Looking Glass without Bridge.")
+        desc_label = ttk.Label(main_frame, text=desc_text, wraplength=550, justify="center")
         desc_label.grid(row=1, column=0, columnspan=3, pady=(0, 20))
         
-        # Input file selection
-        row = 2
-        ttk.Label(main_frame, text="1. Select Quilt Video:", font=('Arial', 10, 'bold')).grid(
-            row=row, column=0, sticky=tk.W, pady=(10, 5))
+        # Input video selection
+        ttk.Label(main_frame, text="1. Select Quilt Video:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.input_video, width=50).grid(row=2, column=1, padx=(10, 5), pady=5, sticky=(tk.W, tk.E))
+        ttk.Button(main_frame, text="Browse", command=self.browse_input_video).grid(row=2, column=2, padx=5, pady=5)
         
-        ttk.Entry(main_frame, textvariable=self.quilt_video_path, width=50).grid(
-            row=row+1, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=(0, 10))
+        # Visual.json selection
+        ttk.Label(main_frame, text="2. Select visual.json:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.visual_json, width=50).grid(row=3, column=1, padx=(10, 5), pady=5, sticky=(tk.W, tk.E))
+        ttk.Button(main_frame, text="Browse", command=self.browse_visual_json).grid(row=3, column=2, padx=5, pady=5)
         
-        ttk.Button(main_frame, text="Browse...", command=self.browse_quilt_video).grid(
-            row=row+1, column=2, sticky=tk.W)
+        # Output path
+        ttk.Label(main_frame, text="3. Output Location:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.output_path, width=50).grid(row=4, column=1, padx=(10, 5), pady=5, sticky=(tk.W, tk.E))
+        ttk.Button(main_frame, text="Browse", command=self.browse_output_path).grid(row=4, column=2, padx=5, pady=5)
         
-        # Visual.json file selection
-        row += 2
-        ttk.Label(main_frame, text="2. Select visual.json:", font=('Arial', 10, 'bold')).grid(
-            row=row, column=0, sticky=tk.W, pady=(10, 5))
-        
-        ttk.Entry(main_frame, textvariable=self.visual_json_path, width=50).grid(
-            row=row+1, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=(0, 10))
-        
-        ttk.Button(main_frame, text="Browse...", command=self.browse_visual_json).grid(
-            row=row+1, column=2, sticky=tk.W)
-        
-        # Output location
-        row += 2
-        ttk.Label(main_frame, text="3. Choose Output Location:", font=('Arial', 10, 'bold')).grid(
-            row=row, column=0, sticky=tk.W, pady=(10, 5))
-        
-        ttk.Entry(main_frame, textvariable=self.output_path, width=50).grid(
-            row=row+1, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=(0, 10))
-        
-        ttk.Button(main_frame, text="Browse...", command=self.browse_output_location).grid(
-            row=row+1, column=2, sticky=tk.W)
-        
-        # Auto-generate output path checkbox
-        row += 2
-        self.auto_output = tk.BooleanVar(value=True)
-        ttk.Checkbutton(main_frame, text="Auto-generate output filename", 
-                       variable=self.auto_output, command=self.update_output_path).grid(
-            row=row, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        # Convert button
+        self.convert_button = ttk.Button(main_frame, text="Convert Video", 
+                                        command=self.start_conversion, style="Accent.TButton")
+        self.convert_button.grid(row=5, column=0, columnspan=3, pady=20, ipadx=20, ipady=10)
         
         # Progress bar
-        row += 2
-        ttk.Label(main_frame, text="Conversion Progress:", font=('Arial', 10, 'bold')).grid(
-            row=row, column=0, sticky=tk.W, pady=(20, 5))
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, 
+                                           maximum=100, length=400)
+        self.progress_bar.grid(row=6, column=0, columnspan=3, pady=10, sticky=(tk.W, tk.E))
         
-        self.progress_bar = ttk.Progressbar(main_frame, variable=self.conversion_progress, 
-                                          maximum=100, length=400)
-        self.progress_bar.grid(row=row+1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 5))
+        # Status label
+        self.status_var = tk.StringVar(value="Ready to convert")
+        self.status_label = ttk.Label(main_frame, textvariable=self.status_var)
+        self.status_label.grid(row=7, column=0, columnspan=3, pady=5)
         
-        self.progress_label = ttk.Label(main_frame, text="Ready to convert", font=('Arial', 9))
-        self.progress_label.grid(row=row+2, column=0, columnspan=3)
+        # Info text area
+        info_frame = ttk.LabelFrame(main_frame, text="Information", padding="10")
+        info_frame.grid(row=8, column=0, columnspan=3, pady=20, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame.rowconfigure(8, weight=1)
         
-        # Buttons frame
-        row += 3
-        buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.grid(row=row, column=0, columnspan=3, pady=(20, 0))
+        self.info_text = tk.Text(info_frame, height=8, width=70, wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(info_frame, orient=tk.VERTICAL, command=self.info_text.yview)
+        self.info_text.configure(yscrollcommand=scrollbar.set)
         
-        self.convert_button = ttk.Button(buttons_frame, text="Convert Video", 
-                                        command=self.start_conversion, style='Accent.TButton')
-        self.convert_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.info_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        info_frame.columnconfigure(0, weight=1)
+        info_frame.rowconfigure(0, weight=1)
         
-        ttk.Button(buttons_frame, text="Help", command=self.show_help).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(buttons_frame, text="Exit", command=self.root.quit).pack(side=tk.LEFT)
+        self.log_info("Welcome to the Looking Glass Quilt Video Converter!")
+        self.log_info("Please select your quilt video file and visual.json calibration file.")
         
-        # Status bar
-        row += 1
-        self.status_var = tk.StringVar(value="Ready")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var, 
-                              relief=tk.SUNKEN, anchor=tk.W, font=('Arial', 8))
-        status_bar.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(20, 0))
-    
-    def browse_quilt_video(self):
-        """Browse for quilt video file"""
+    def log_info(self, message):
+        """Add a message to the info text area"""
+        self.info_text.insert(tk.END, message + "\n")
+        self.info_text.see(tk.END)
+        self.root.update_idletasks()
+        
+    def browse_input_video(self):
+        """Browse for input quilt video file"""
         filename = filedialog.askopenfilename(
-            title="Select Quilt Video",
-            filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv"), ("All files", "*.*")]
+            title="Select Quilt Video File",
+            filetypes=[
+                ("Video files", "*.mp4 *.mov *.avi *.mkv"),
+                ("All files", "*.*")
+            ]
         )
         if filename:
-            self.quilt_video_path.set(filename)
-            self.update_output_path()
-            self.status_var.set(f"Selected quilt video: {os.path.basename(filename)}")
-    
+            self.input_video.set(filename)
+            self.auto_set_output_path()
+            self.log_info(f"Selected input video: {Path(filename).name}")
+            
     def browse_visual_json(self):
-        """Browse for visual.json file"""
+        """Browse for visual.json calibration file"""
         filename = filedialog.askopenfilename(
-            title="Select visual.json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            title="Select visual.json Calibration File",
+            filetypes=[
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
+            ]
         )
         if filename:
-            self.visual_json_path.set(filename)
-            self.status_var.set(f"Selected calibration: {os.path.basename(filename)}")
-    
-    def browse_output_location(self):
-        """Browse for output file location"""
+            self.visual_json.set(filename)
+            self.log_info(f"Selected calibration file: {Path(filename).name}")
+            self.load_calibration_info()
+            
+    def browse_output_path(self):
+        """Browse for output video location"""
         filename = filedialog.asksaveasfilename(
             title="Save Converted Video As",
             defaultextension=".mp4",
-            filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")]
+            filetypes=[
+                ("MP4 videos", "*.mp4"),
+                ("All files", "*.*")
+            ]
         )
         if filename:
             self.output_path.set(filename)
-            self.auto_output.set(False)
-    
-    def update_output_path(self):
-        """Auto-generate output path based on input video"""
-        if self.auto_output.get() and self.quilt_video_path.get():
-            input_path = Path(self.quilt_video_path.get())
+            self.log_info(f"Output will be saved to: {Path(filename).name}")
+            
+    def auto_set_output_path(self):
+        """Automatically set output path based on input video"""
+        if self.input_video.get():
+            input_path = Path(self.input_video.get())
             output_name = f"{input_path.stem}_LookingGlassReady.mp4"
             output_path = input_path.parent / output_name
             self.output_path.set(str(output_path))
-    
-    def validate_inputs(self):
-        """Validate all input fields"""
-        if not self.quilt_video_path.get():
-            messagebox.showerror("Error", "Please select a quilt video file")
-            return False
-        
-        if not os.path.exists(self.quilt_video_path.get()):
-            messagebox.showerror("Error", "Quilt video file does not exist")
-            return False
-        
-        if not self.visual_json_path.get():
-            messagebox.showerror("Error", "Please select a visual.json file")
-            return False
-        
-        if not os.path.exists(self.visual_json_path.get()):
-            messagebox.showerror("Error", "visual.json file does not exist")
-            return False
-        
-        if not self.output_path.get():
-            messagebox.showerror("Error", "Please specify an output location")
-            return False
-        
-        # Validate JSON file
+            
+    def load_calibration_info(self):
+        """Load and display calibration information"""
         try:
-            with open(self.visual_json_path.get(), 'r') as f:
-                json.load(f)
+            with open(self.visual_json.get(), 'r') as f:
+                self.calibration = json.load(f)
+                
+            screen_w = self.calibration.get('screenW', 'Unknown')
+            screen_h = self.calibration.get('screenH', 'Unknown')
+            pitch = self.calibration.get('pitch', 'Unknown')
+            
+            self.log_info(f"Calibration loaded: {screen_w}x{screen_h} display, pitch: {pitch}")
+            
         except Exception as e:
-            messagebox.showerror("Error", f"Invalid JSON file: {e}")
+            self.log_info(f"Error loading calibration: {e}")
+            self.calibration = None
+            
+    def validate_inputs(self):
+        """Validate all input parameters"""
+        if not self.input_video.get():
+            messagebox.showerror("Error", "Please select an input video file.")
             return False
-        
+            
+        if not os.path.exists(self.input_video.get()):
+            messagebox.showerror("Error", "Input video file does not exist.")
+            return False
+            
+        if not self.visual_json.get():
+            messagebox.showerror("Error", "Please select a visual.json calibration file.")
+            return False
+            
+        if not os.path.exists(self.visual_json.get()):
+            messagebox.showerror("Error", "Visual.json calibration file does not exist.")
+            return False
+            
+        if not self.output_path.get():
+            messagebox.showerror("Error", "Please specify an output path.")
+            return False
+            
         return True
-    
+        
     def start_conversion(self):
-        """Start the video conversion process"""
+        """Start the video conversion process in a separate thread"""
         if not self.validate_inputs():
             return
-        
-        if self.is_converting:
-            messagebox.showwarning("Warning", "Conversion already in progress")
-            return
+            
+        # Disable the convert button
+        self.convert_button.config(state="disabled")
+        self.progress_var.set(0)
         
         # Start conversion in separate thread
-        self.is_converting = True
-        self.convert_button.config(state='disabled', text="Converting...")
-        self.conversion_progress.set(0)
+        conversion_thread = threading.Thread(target=self.convert_video)
+        conversion_thread.daemon = True
+        conversion_thread.start()
         
-        thread = threading.Thread(target=self.convert_video, daemon=True)
-        thread.start()
-    
     def convert_video(self):
-        """Convert the quilt video"""
+        """Convert the quilt video to native format"""
         try:
-            converter = QuiltVideoProcessor(
-                self.quilt_video_path.get(),
-                self.visual_json_path.get(),
-                self.output_path.get(),
-                progress_callback=self.update_progress
-            )
+            self.status_var.set("Loading calibration...")
             
-            success = converter.process()
+            # Load calibration
+            if not self.calibration:
+                self.load_calibration_info()
+                
+            if not self.calibration:
+                raise Exception("Could not load calibration data")
             
-            # Update UI in main thread
-            self.root.after(0, self.conversion_complete, success)
+            # Parse quilt parameters
+            filename = Path(self.input_video.get()).name
+            quilt_cols, quilt_rows, quilt_aspect = self.parse_quilt_filename(filename)
             
-        except Exception as e:
-            self.root.after(0, self.conversion_error, str(e))
-    
-    def update_progress(self, progress, message):
-        """Update progress bar and message"""
-        self.root.after(0, lambda: self.conversion_progress.set(progress))
-        self.root.after(0, lambda: self.progress_label.config(text=message))
-        self.root.after(0, lambda: self.status_var.set(message))
-    
-    def conversion_complete(self, success):
-        """Handle conversion completion"""
-        self.is_converting = False
-        self.convert_button.config(state='normal', text="Convert Video")
-        
-        if success:
-            self.progress_label.config(text="Conversion completed successfully!")
-            self.status_var.set("Conversion completed successfully!")
+            self.log_info(f"Quilt parameters: {quilt_cols}x{quilt_rows} tiles, aspect {quilt_aspect}")
             
-            result = messagebox.askyesno(
-                "Success!", 
-                f"Video converted successfully!\n\nOutput: {os.path.basename(self.output_path.get())}\n\n"
-                "Would you like to open the output folder?"
-            )
+            # Open input video
+            self.status_var.set("Opening video...")
+            cap = cv2.VideoCapture(self.input_video.get())
+            if not cap.isOpened():
+                raise Exception(f"Could not open video file")
+                
+            # Get video properties
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
-            if result:
-                # Open folder containing output file
-                output_dir = os.path.dirname(self.output_path.get())
-                if sys.platform == "win32":
-                    os.startfile(output_dir)
-                elif sys.platform == "darwin":
-                    os.system(f"open '{output_dir}'")
-                else:
-                    os.system(f"xdg-open '{output_dir}'")
-        else:
-            self.progress_label.config(text="Conversion failed")
-            self.status_var.set("Conversion failed")
-    
-    def conversion_error(self, error_msg):
-        """Handle conversion error"""
-        self.is_converting = False
-        self.convert_button.config(state='normal', text="Convert Video")
-        self.progress_label.config(text="Conversion failed")
-        self.status_var.set("Conversion failed")
-        
-        messagebox.showerror("Conversion Error", f"An error occurred during conversion:\n\n{error_msg}")
-    
-    def show_help(self):
-        """Show help dialog"""
-        help_text = """Looking Glass Quilt Video Converter Help
-
-This application converts quilt videos to Looking Glass ready format.
-
-Steps:
-1. Select your quilt video file (e.g., NameOfVideo_qs5x9a1.87.mp4)
-2. Select your Looking Glass calibration file (visual.json)
-3. Choose where to save the converted video
-4. Click "Convert Video"
-
-The visual.json file contains your Looking Glass display's calibration data and can be found at:
-• Windows: %USERPROFILE%\\AppData\\Local\\LookingGlass\\Bridge\\Locations\\LKG-XXXXXX\\LKG_calibration\\visual.json
-• macOS: ~/Library/Application Support/LookingGlass/Bridge/Locations/LKG-XXXXXX/LKG_calibration/visual.json
-• Linux: ~/.local/share/LookingGlass/Bridge/Locations/LKG-XXXXXX/LKG_calibration/visual.json
-
-The converted video will be ready to play in fullscreen mode on your Looking Glass display.
-
-For support, visit: https://docs.lookingglassfactory.com"""
-        
-        messagebox.showinfo("Help", help_text)
-
-class QuiltVideoProcessor:
-    def __init__(self, quilt_video_path, visual_json_path, output_path, progress_callback=None):
-        self.quilt_video_path = quilt_video_path
-        self.visual_json_path = visual_json_path
-        self.output_path = output_path
-        self.progress_callback = progress_callback
-        
-        # Parse quilt parameters
-        self.parse_quilt_filename()
-        
-        # Load calibration
-        self.load_calibration()
-    
-    def parse_quilt_filename(self):
-        """Extract quilt parameters from filename"""
-        filename = Path(self.quilt_video_path).stem
-        
-        # Default values
-        self.columns = 5
-        self.rows = 9
-        self.aspect_ratio = 1.87
-        
-        # Parse filename (e.g., "qs5x9a1.87")
-        if 'qs' in filename:
-            parts = filename.split('a')
-            if len(parts) >= 2:
-                try:
-                    self.aspect_ratio = float(parts[1])
-                except ValueError:
-                    pass
+            self.log_info(f"Input video: {total_frames} frames at {fps:.2f} FPS")
             
-            # Extract dimensions
-            quilt_part = parts[0].replace('qs', '')
-            if 'x' in quilt_part:
-                try:
-                    cols, rows = quilt_part.split('x')
-                    self.columns = int(cols)
-                    self.rows = int(rows)
-                except ValueError:
-                    pass
-    
-    def load_calibration(self):
-        """Load calibration from visual.json"""
-        with open(self.visual_json_path, 'r') as f:
-            self.calibration = json.load(f)
-    
-    def update_progress(self, progress, message):
-        """Update progress if callback provided"""
-        if self.progress_callback:
-            self.progress_callback(progress, message)
-    
-    def process(self):
-        """Process the quilt video"""
-        self.update_progress(0, "Opening video file...")
-        
-        # Open input video
-        cap = cv2.VideoCapture(self.quilt_video_path)
-        if not cap.isOpened():
-            raise Exception(f"Cannot open video file: {self.quilt_video_path}")
-        
-        # Get video properties
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        self.update_progress(5, f"Converting from {width}x{height} quilt to 3840x2160 display format")
-        
-        # Calculate view dimensions
-        view_width = width // self.columns
-        view_height = height // self.rows
-        
-        # Setup output video with target resolution
-        target_width = 3840  # Looking Glass display width
-        target_height = 2160  # Looking Glass display height
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(self.output_path, fourcc, fps, (target_width, target_height))
-        
-        try:
-            frame_idx = 0
+            # Setup output video writer
+            screen_w = self.calibration.get('screenW', 2560)
+            screen_h = self.calibration.get('screenH', 1600)
+            
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(self.output_path.get(), fourcc, fps, (screen_w, screen_h))
+            
+            if not out.isOpened():
+                raise Exception("Could not create output video file")
+                
+            self.log_info(f"Output resolution: {screen_w}x{screen_h}")
+            self.status_var.set("Converting frames...")
+            
+            # Process each frame
+            frame_count = 0
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
+                    
+                # Convert frame
+                native_frame = self.create_native_frame(frame, quilt_cols, quilt_rows, quilt_aspect)
+                out.write(native_frame)
                 
-                # Process frame with Looking Glass transformation
-                processed_frame = self.apply_looking_glass_transform(frame)
-                out.write(processed_frame)
+                # Update progress
+                frame_count += 1
+                progress = (frame_count / total_frames) * 100
+                self.progress_var.set(progress)
                 
-                frame_idx += 1
-                
-                # Update progress every 10 frames
-                if frame_idx % 10 == 0:
-                    progress = 10 + (frame_idx / frame_count) * 85  # 10-95% for processing
-                    self.update_progress(progress, f"Processing frame {frame_idx}/{frame_count}")
-            
-            self.update_progress(95, "Finalizing video...")
-            
-        finally:
+                if frame_count % 30 == 0:  # Update status every 30 frames
+                    self.status_var.set(f"Converting frames... {frame_count}/{total_frames}")
+                    
+            # Cleanup
             cap.release()
             out.release()
+            
+            self.status_var.set("Conversion complete!")
+            self.progress_var.set(100)
+            self.log_info("✓ Conversion successful!")
+            self.log_info(f"Output saved to: {Path(self.output_path.get()).name}")
+            
+            messagebox.showinfo("Success", "Video conversion completed successfully!")
+            
+        except Exception as e:
+            self.log_info(f"Error during conversion: {e}")
+            self.status_var.set(f"Error: {e}")
+            messagebox.showerror("Conversion Error", f"An error occurred during conversion:\n{e}")
+            
+        finally:
+            # Re-enable the convert button
+            self.convert_button.config(state="normal")
+            
+    def parse_quilt_filename(self, filename: str) -> Tuple[int, int, float]:
+        """Parse quilt parameters from filename"""
+        pattern = r'qs(\d+)x(\d+)a([\d.]+)'
+        match = re.search(pattern, filename)
         
-        self.update_progress(100, "Conversion completed!")
-        return True
-    
-    def apply_looking_glass_transform(self, quilt_frame):
-        """Apply Looking Glass optical transformation"""
-        height, width = quilt_frame.shape[:2]
+        if not match:
+            self.log_info("Warning: Could not parse quilt parameters. Using defaults: 5x9, aspect 1.87")
+            return 5, 9, 1.87
+            
+        cols = int(match.group(1))
+        rows = int(match.group(2))
+        aspect = float(match.group(3))
+        
+        return cols, rows, aspect
+        
+    def create_native_frame(self, quilt_frame: np.ndarray, quilt_cols: int, quilt_rows: int, quilt_aspect: float) -> np.ndarray:
+        """Convert a single quilt frame to native Looking Glass format"""
+        quilt_h, quilt_w = quilt_frame.shape[:2]
+        
+        # Calculate tile dimensions
+        tile_w = quilt_w // quilt_cols
+        tile_h = quilt_h // quilt_rows
+        
+        # Create output native image
+        native_w = self.calibration.get('screenW', 2560)
+        native_h = self.calibration.get('screenH', 1600)
+        native_frame = np.zeros((native_h, native_w, 3), dtype=np.uint8)
         
         # Extract calibration parameters
-        calibration_data = self.calibration
-        center = calibration_data.get('center', {}).get('value', 0.0)
-        pitch = calibration_data.get('pitch', {}).get('value', 50.0)
-        slope = calibration_data.get('slope', {}).get('value', -5.0)
-        dpi = calibration_data.get('DPI', {}).get('value', 338.0)
+        center = self.calibration.get('center', 0.0)
+        pitch = self.calibration.get('pitch', 49.825)
+        slope = self.calibration.get('slope', -5.2094)
         
-        # Apply lenticular interlacing transformation
-        return self.apply_lenticular_interlacing(quilt_frame, center, pitch, slope)
-    
-    def apply_lenticular_interlacing(self, quilt_frame, center, pitch, slope):
-        """Apply proper lenticular interlacing based on calibration"""
-        height, width = quilt_frame.shape[:2]
-        
-        # Target output resolution (Looking Glass display size)
-        target_width = 3840
-        target_height = 2160
-        
-        # Create output frame with target resolution
-        output_frame = np.zeros((target_height, target_width, 3), dtype=quilt_frame.dtype)
-        
-        view_width = width // self.columns
-        view_height = height // self.rows
-        total_views = self.columns * self.rows
-        
-        # Normalize calibration parameters
-        center_norm = center if abs(center) <= 1.0 else center / target_width
-        pitch_pixels = pitch if pitch > 1.0 else pitch * target_width
-        
-        # Scale quilt to target height while maintaining aspect ratio
-        scale_factor = target_height / view_height
-        scaled_view_width = int(view_width * scale_factor)
-        
-        # Process each column in the output
-        for x in range(target_width):
-            # Calculate the lenticular lens position for this pixel column
-            lens_pos = (x / target_width - 0.5 - center_norm) / pitch_pixels * target_width
-            
-            # Determine which view this pixel should sample from
-            view_float = (lens_pos + slope) * total_views / target_width + total_views / 2
-            view_index = int(view_float) % total_views
-            
-            # Ensure view index is valid
-            if view_index < 0:
-                view_index += total_views
-            
-            # Convert view index to grid position
-            view_col = view_index % self.columns
-            view_row = view_index // self.columns
-            
-            # Calculate sub-pixel position within the view
-            subpixel_x = (view_float - int(view_float)) * scaled_view_width
-            source_x = int((view_col * view_width) + (subpixel_x * view_width / scaled_view_width))
-            source_x = max(0, min(source_x, width - 1))
-            
-            # Extract and scale the column from the source view
-            source_y_start = view_row * view_height
-            source_y_end = min(source_y_start + view_height, height)
-            
-            if source_y_start < height:
-                # Get the column from the quilt
-                source_column = quilt_frame[source_y_start:source_y_end, source_x:source_x+1]
+        # Convert each pixel in the native image
+        for y in range(native_h):
+            for x in range(native_w):
+                # Normalize coordinates to [-1, 1]
+                norm_x = (2.0 * x / native_w) - 1.0
+                norm_y = (2.0 * y / native_h) - 1.0
                 
-                if source_column.shape[0] > 0:
-                    # Resize to target height
-                    if source_column.shape[0] != target_height:
-                        resized_column = cv2.resize(source_column, (1, target_height), interpolation=cv2.INTER_LINEAR)
-                        output_frame[:, x] = resized_column.reshape(target_height, 3)
-                    else:
-                        output_frame[:, x] = source_column.reshape(target_height, 3)
-        
-        return output_frame
+                # Calculate which view this pixel should sample from
+                view_angle = norm_x * slope + center
+                view_index = (view_angle + 1.0) * 0.5 * (quilt_cols * quilt_rows - 1)
+                view_index = max(0, min(quilt_cols * quilt_rows - 1, int(view_index)))
+                
+                # Convert view index to tile coordinates
+                tile_y = view_index // quilt_cols
+                tile_x = view_index % quilt_cols
+                
+                # Calculate pixel position within the tile
+                tile_pixel_x = int((norm_x + 1.0) * 0.5 * tile_w)
+                tile_pixel_y = int((norm_y + 1.0) * 0.5 * tile_h)
+                
+                # Clamp to tile boundaries
+                tile_pixel_x = max(0, min(tile_w - 1, tile_pixel_x))
+                tile_pixel_y = max(0, min(tile_h - 1, tile_pixel_y))
+                
+                # Calculate absolute coordinates in quilt
+                quilt_x = tile_x * tile_w + tile_pixel_x
+                quilt_y = tile_y * tile_h + tile_pixel_y
+                
+                # Sample from quilt and assign to native frame
+                native_frame[y, x] = quilt_frame[quilt_y, quilt_x]
+                
+        return native_frame
 
 def main():
-    """Main application entry point"""
+    # Check for required modules
     try:
-        # Create and run the GUI application
-        root = tk.Tk()
-        app = QuiltConverterGUI(root)
-        root.mainloop()
-    except Exception as e:
-        messagebox.showerror("Application Error", f"An error occurred: {e}")
+        import cv2
+        import numpy as np
+        import tkinter as tk
+    except ImportError as e:
+        print(f"Required module not found: {e}")
+        print("Please install required packages: pip install opencv-python numpy")
+        sys.exit(1)
+        
+    root = tk.Tk()
+    app = QuiltConverterGUI(root)
+    root.mainloop()
 
 if __name__ == "__main__":
     main()
